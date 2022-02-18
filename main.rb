@@ -23,7 +23,7 @@ end
 
 ac_cache_included_paths = get_env_variable('AC_CACHE_INCLUDED_PATHS') || abort('Included paths must be defined.')
 ac_cache_excluded_paths = get_env_variable('AC_CACHE_EXCLUDED_PATHS')
-ac_repository_path = get_env_variable('AC_REPOSITORY_DIR') || abort('Repository path must be defined.')
+ac_repository_path = get_env_variable('AC_REPOSITORY_DIR')
 ac_cache_label = get_env_variable('AC_CACHE_LABEL') || abort('Cache label path must be defined.')
 ac_token_id = get_env_variable('AC_TOKEN_ID') || abort('AC_TOKEN_ID env variable must be set when build started.')
 
@@ -36,10 +36,12 @@ install_deps_if_not_exist('zip')
 @cache = "ac_cache/#{ac_cache_label}"
 zipped = "ac_cache/#{ac_cache_label.gsub('/', '_')}.zip"
 
+puts 'Inputs:'
+puts ac_cache_label
 puts ac_cache_included_paths
 puts ac_cache_excluded_paths
 puts ac_repository_path
-puts ''
+puts '------'
 
 system("mkdir -p #{@cache}/repository")
 
@@ -100,8 +102,8 @@ def get_excluded_paths(paths)
     next if path.empty?
 
     # @todo: Check $home path for other types of agents and build profiles
-    if path.start_with?('$HOME')
-      path = path[('$HOME'.length + 1)..-1]
+    if path.start_with?('~/')
+      path = path[('~/'.length)..-1]
       g_excludes.push("/setup/#{path}")
     else
       r_excludes.push(path)
@@ -118,11 +120,13 @@ ac_cache_included_paths.split(':').each do |included_path|
   next if included_path.empty?
 
   # @todo: Check $home path for other types of agents and build profiles
-  if included_path.start_with?('$HOME')
-    included_path = included_path[('$HOME'.length + 1)..-1]
+  if included_path.start_with?('~/')
+    included_path = included_path[('~/'.length)..-1]
     cache_path('/setup', included_path, excluded_paths['global'])
-  else
+  elsif ac_repository_path
     cache_repository_path(ac_repository_path, included_path, excluded_paths['repository'])
+  else
+    puts "Warning: #{included_path} is ignored. It can be used only after Git Clone workflow step."
   end
 end
 

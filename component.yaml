@@ -21,7 +21,7 @@ inputs:
   helpText:
 - key: "AC_REPOSITORY_DIR"
   defaultValue: "$AC_REPOSITORY_DIR"
-  isRequired: true
+  isRequired: false
   title: Repository Path
   description: "Specifies the cloned repository path."
 processFilename: ruby

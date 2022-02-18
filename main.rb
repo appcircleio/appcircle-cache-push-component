@@ -25,10 +25,12 @@ ac_cache_included_paths = get_env_variable('AC_CACHE_INCLUDED_PATHS') || abort('
 ac_cache_excluded_paths = get_env_variable('AC_CACHE_EXCLUDED_PATHS')
 ac_repository_path = get_env_variable('AC_REPOSITORY_DIR')
 ac_cache_label = get_env_variable('AC_CACHE_LABEL') || abort('Cache label path must be defined.')
-ac_token_id = get_env_variable('AC_TOKEN_ID') || abort('AC_TOKEN_ID env variable must be set when build started.')
 
-# @todo: base url should be dynamic
-signed_url_api = 'https://dev-api.appcircle.io/build/v1/callback?action=getCacheUrls'
+ac_token_id = get_env_variable('AC_TOKEN_ID') || abort('AC_TOKEN_ID env variable must be set when build started.')
+ac_callback_url = get_env_variable('ASPNETCORE_CALLBACK_URL') ||
+                  abort('ASPNETCORE_CALLBACK_URL env variable must be set when build started.')
+
+signed_url_api = "#{ac_callback_url}?action=getCacheUrls"
 
 install_deps_if_not_exist('curl')
 install_deps_if_not_exist('zip')

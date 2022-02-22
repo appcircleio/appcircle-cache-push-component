@@ -65,7 +65,7 @@ def expand_exclude(pattern)
     exclude = "\"#{exclude}\""
     exclude += " \"#{pattern.gsub('**/', '')}/*\"" if pattern.include? '**/'
   else
-    exclude = "\"#{exclude}\""
+    exclude = "\"#{pattern}\""
   end
   exclude
 end

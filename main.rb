@@ -142,12 +142,13 @@ def get_excluded_paths(paths)
   g_excludes = []
 
   paths.split(':').each do |path|
-    path = path[1..-1] if !path.empty? && path[0] == '/'
     next if path.empty?
 
     if path.start_with?('~/')
       path = path[('~/'.length)..-1]
       g_excludes.push("#{home}/#{path}")
+    elsif path.start_with?('/')
+      g_excludes.push(path)
     else
       r_excludes.push(path)
     end
@@ -159,12 +160,13 @@ excluded_paths = get_excluded_paths(ac_cache_excluded_paths)
 puts excluded_paths
 
 ac_cache_included_paths.split(':').each do |included_path|
-  included_path = included_path[1..-1] if !included_path.empty? && included_path[0] == '/'
   next if included_path.empty?
 
   if included_path.start_with?('~/')
     included_path = included_path[('~/'.length)..-1]
     cache_path(home, included_path, excluded_paths['global'])
+  elsif included_path.start_with?('/')
+    cache_path('', included_path[1..-1], excluded_paths['global'])
   elsif ac_repository_path
     cache_repository_path(ac_repository_path, included_path, excluded_paths['repository'])
   else

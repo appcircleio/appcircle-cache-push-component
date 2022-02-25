@@ -33,8 +33,8 @@ ac_repository_path = get_env_variable('AC_REPOSITORY_DIR')
 ac_cache_label = get_env_variable('AC_CACHE_LABEL') || abort_with0('Cache label path must be defined.')
 
 ac_token_id = get_env_variable('AC_TOKEN_ID') || abort_with0('AC_TOKEN_ID env variable must be set when build started.')
-ac_callback_url = get_env_variable('ASPNETCORE_CALLBACK_URL') ||
-                  abort_with0('ASPNETCORE_CALLBACK_URL env variable must be set when build started.')
+ac_callback_url = get_env_variable('AC_CALLBACK_URL') ||
+                  abort_with0('AC_CALLBACK_URL env variable must be set when build started.')
 
 def ac_output_dir
   out_dir = get_env_variable('AC_OUTPUT_DIR')

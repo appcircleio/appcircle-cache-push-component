@@ -19,7 +19,10 @@ end
 
 def run_command_with_log(command)
   puts "@@[command] #{command}"
+  s = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   run_command(command)
+  e = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  puts "took #{(e - s).round(3)}s"
 end
 
 def abort_with0(message)
@@ -202,6 +205,6 @@ unless ac_token_id.empty?
     puts signed['putUrl']
 
     ENV['AC_CACHE_PUT_URL'] = signed['putUrl']
-    run_command("curl -X PUT -H \"Content-Type: application/zip\" --upload-file #{zipped} $AC_CACHE_PUT_URL")
+    run_command_with_log("curl -0 -X PUT -H \"Content-Type: application/zip\" --upload-file #{zipped} $AC_CACHE_PUT_URL")
   end
 end

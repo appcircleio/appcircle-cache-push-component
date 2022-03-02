@@ -3,6 +3,7 @@ require 'net/http'
 require 'json'
 require 'os'
 require 'digest'
+require 'set'
 
 def get_env_variable(key)
   return nil if ENV[key].nil? || ENV[key].strip.empty?
@@ -112,13 +113,18 @@ end
 def cache_path(base_path, included_path, excluded_paths, env_dirs)
   puts "Include: #{included_path} in #{base_path}"
 
+  unless Dir.exist?(base_path)
+    puts "Warning: #{base_path} doesn't exist yet. Check folder is correct and available."
+    return nil
+  end
+
   cwd = Dir.pwd
   Dir.chdir(base_path)
   paths = Dir.glob(included_path.to_s, File::FNM_DOTMATCH)
 
   if paths.empty?
     Dir.chdir(cwd)
-    return
+    return nil
   end
 
   base_path = "/#{env_dirs[base_path]}" if env_dirs.key?(base_path)
@@ -131,6 +137,7 @@ def cache_path(base_path, included_path, excluded_paths, env_dirs)
   run_zip(zip_file, zip)
 
   Dir.chdir(cwd)
+  zip_file
 end
 
 def home
@@ -141,7 +148,16 @@ def home
   end
 end
 
-def find_base_path(path)
+def search_env_dirs(path, env_dirs)
+  return path if env_dirs.key?(path)
+
+  index_of_slash = path.rindex('/')
+  return search_env_dirs(path[0..index_of_slash - 1], env_dirs) if index_of_slash.positive?
+
+  nil
+end
+
+def find_base_path(path, env_dirs)
   base_path = ''
   parts = path.split('/')
   order = 1
@@ -152,10 +168,11 @@ def find_base_path(path)
     base_path += "/#{w}" unless w.empty?
     order += 1
   end
-  base_path
+  env_path = search_env_dirs(base_path, env_dirs)
+  env_path || base_path
 end
 
-def get_excluded_paths(paths)
+def get_excluded_paths(paths, env_dirs)
   home = '~/'
 
   excludes = Hash.new('')
@@ -169,7 +186,7 @@ def get_excluded_paths(paths)
       path = path[(home.length)..-1]
       excludes[home].push(path)
     elsif path.start_with?('/')
-      base_path = find_base_path(path)
+      base_path = find_base_path(path, env_dirs)
       next unless base_path
 
       excludes[base_path] = [] unless excludes.key?(base_path)
@@ -181,26 +198,40 @@ def get_excluded_paths(paths)
   excludes
 end
 
-excluded_paths = get_excluded_paths(ac_cache_excluded_paths)
+excluded_paths = get_excluded_paths(ac_cache_excluded_paths, env_dirs)
 puts excluded_paths
+
+uptodate_zips = Set.new([])
 
 ac_cache_included_paths.split(':').each do |included_path|
   next if included_path.empty?
 
+  zip_file = nil
   if included_path.start_with?('~/')
     included_path = included_path[('~/'.length)..-1]
-    cache_path(home, included_path, excluded_paths['~/'], env_dirs)
+    zip_file = cache_path(home, included_path, excluded_paths['~/'], env_dirs)
   elsif included_path.start_with?('/')
-    base_path = find_base_path(included_path)
+    base_path = find_base_path(included_path, env_dirs)
     next unless base_path
 
-    cache_path(base_path, included_path[(base_path.length + 1)..-1], excluded_paths[base_path], env_dirs)
+    zip_file = cache_path(base_path, included_path[(base_path.length + 1)..-1], excluded_paths[base_path], env_dirs)
   elsif ac_repository_path
-    cache_path(ac_repository_path, included_path, excluded_paths[''], env_dirs)
+    zip_file = cache_path(ac_repository_path, included_path, excluded_paths[''], env_dirs)
   else
     puts "Warning: #{included_path} is skipped. It can be used only after Git Clone workflow step."
   end
+
+  uptodate_zips.add(zip_file.sub("#{Dir.pwd}/", '')) if zip_file
 end
+
+# remove dead zips (includes) from pulled zips if not in uptodate set
+Dir.glob("#{@cache}/**/*.zip", File::FNM_DOTMATCH).each do |zip_file|
+  unless uptodate_zips.include?(zip_file)
+    system("rm -f #{zip_file}")
+    puts "Info: #{zip_file} is not in uptodate includes. Removed."
+  end
+end
+system("find #{@cache} -empty -type d -delete")
 
 run_command("[ -s #{zipped} ] || rm -f #{zipped}")
 run_command_with_log("zip -r -0 -FS #{zipped} #{@cache}")

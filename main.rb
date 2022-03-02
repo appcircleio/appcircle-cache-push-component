@@ -53,14 +53,17 @@ run_command('curl --version |head -1')
 @cache = "ac_cache/#{ac_cache_label}"
 zipped = "ac_cache/#{ac_cache_label.gsub('/', '_')}.zip"
 
-puts 'Inputs:'
+puts '--- Inputs:'
 puts ac_cache_label
 puts ac_cache_included_paths
 puts ac_cache_excluded_paths
 puts ac_repository_path
-puts '------'
+puts '-----------'
 
-system("mkdir -p #{@cache}/repository")
+env_dirs = Hash.new('')
+ENV.each_pair do |k, v|
+  env_dirs[v] = k if k.start_with?('AC_') && File.directory?(v)
+end
 
 def expand_exclude(pattern)
   if pattern.end_with?('/\*')
@@ -73,33 +76,41 @@ def expand_exclude(pattern)
   exclude
 end
 
-def cache_path(base_path, included_path, excluded_paths)
-  puts "Global Include: #{included_path}"
+def add_includes(included_paths, zip)
+  included_paths.each do |f|
+    next if ['.', '..'].include?(f)
+    next if f.end_with?('.') || f.end_with?('..')
 
-  glob_pattern = "#{base_path}/#{included_path}"
-
-  paths = Dir.glob(glob_pattern, File::FNM_DOTMATCH)
-  return if paths.empty?
-
-  zip_file = "#{@cache}/#{glob_pattern.gsub('/', '_')}.zip"
-  zip = "zip -r -FS #{zip_file}"
-  paths.each do |f|
     zip += " #{f}"
   end
-  zip += ' -x' unless excluded_paths.empty?
+  zip
+end
+
+def add_excludes(excluded_paths, zip)
+  return zip if excluded_paths.empty?
+
+  zip += ' -x'
   excluded_paths.each do |excluded|
     zip += " #{expand_exclude(excluded)}"
   end
+  zip
+end
+
+def add_log_file(folder, file, zip)
   if ac_output_dir
-    system("mkdir -p #{ac_output_dir}/#{@cache}")
-    zip += " > #{ac_output_dir}/#{zip_file}.log"
+    system("mkdir -p #{folder}")
+    zip += " > #{folder}/#{file}"
   end
+  zip
+end
+
+def run_zip(zip_file, zip)
   run_command_with_log(zip)
   run_command("ls -lh #{zip_file}")
 end
 
-def cache_repository_path(base_path, included_path, excluded_paths)
-  puts "Repository Include: #{included_path}"
+def cache_path(base_path, included_path, excluded_paths, env_dirs)
+  puts "Include: #{included_path} in #{base_path}"
 
   cwd = Dir.pwd
   Dir.chdir(base_path)
@@ -110,24 +121,14 @@ def cache_repository_path(base_path, included_path, excluded_paths)
     return
   end
 
-  zip_file = "#{cwd}/#{@cache}/repository/#{included_path.gsub('/', '_')}.zip"
+  base_path = "/#{env_dirs[base_path]}" if env_dirs.key?(base_path)
+  zip_file = "#{cwd}/#{@cache}#{base_path}/#{included_path.gsub('/', '_')}.zip"
+  system("mkdir -p #{cwd}/#{@cache}#{base_path}")
   zip = "zip -r -FS #{zip_file}"
-  paths.each do |f|
-    next if ['.', '..'].include?(f)
-    next if f.end_with?('.') || f.end_with?('..')
-
-    zip += " #{f}"
-  end
-  zip += ' -x' unless excluded_paths.empty?
-  excluded_paths.each do |excluded|
-    zip += " #{expand_exclude(excluded)}"
-  end
-  if ac_output_dir
-    system("mkdir -p #{ac_output_dir}/#{@cache}/repository")
-    zip += " > #{ac_output_dir}/#{@cache}/repository/#{included_path.gsub('/', '_')}.zip.log"
-  end
-  run_command_with_log(zip)
-  run_command("ls -lh #{zip_file}")
+  zip = add_includes(paths, zip)
+  zip = add_excludes(excluded_paths, zip)
+  zip = add_log_file("#{ac_output_dir}/#{@cache}#{base_path}", "#{included_path.gsub('/', '_')}.zip.log", zip)
+  run_zip(zip_file, zip)
 
   Dir.chdir(cwd)
 end
@@ -140,23 +141,44 @@ def home
   end
 end
 
+def find_base_path(path)
+  base_path = ''
+  parts = path.split('/')
+  order = 1
+  parts.each do |w|
+    break if order == parts.length
+    break if w.include?('*')
+
+    base_path += "/#{w}" unless w.empty?
+    order += 1
+  end
+  base_path
+end
+
 def get_excluded_paths(paths)
-  r_excludes = []
-  g_excludes = []
+  home = '~/'
+
+  excludes = Hash.new('')
+  excludes[home] = []
+  excludes[''] = [] # repository
 
   paths.split(':').each do |path|
     next if path.empty?
 
-    if path.start_with?('~/')
-      path = path[('~/'.length)..-1]
-      g_excludes.push("#{home}/#{path}")
+    if path.start_with?(home)
+      path = path[(home.length)..-1]
+      excludes[home].push(path)
     elsif path.start_with?('/')
-      g_excludes.push(path)
+      base_path = find_base_path(path)
+      next unless base_path
+
+      excludes[base_path] = [] unless excludes.key?(base_path)
+      excludes[base_path].push(path[(base_path.length + 1)..-1])
     else
-      r_excludes.push(path)
+      excludes[''].push(path)
     end
   end
-  { 'global' => g_excludes, 'repository' => r_excludes }
+  excludes
 end
 
 excluded_paths = get_excluded_paths(ac_cache_excluded_paths)
@@ -167,11 +189,14 @@ ac_cache_included_paths.split(':').each do |included_path|
 
   if included_path.start_with?('~/')
     included_path = included_path[('~/'.length)..-1]
-    cache_path(home, included_path, excluded_paths['global'])
+    cache_path(home, included_path, excluded_paths['~/'], env_dirs)
   elsif included_path.start_with?('/')
-    cache_path('', included_path[1..-1], excluded_paths['global'])
+    base_path = find_base_path(included_path)
+    next unless base_path
+
+    cache_path(base_path, included_path[(base_path.length + 1)..-1], excluded_paths[base_path], env_dirs)
   elsif ac_repository_path
-    cache_repository_path(ac_repository_path, included_path, excluded_paths['repository'])
+    cache_path(ac_repository_path, included_path, excluded_paths[''], env_dirs)
   else
     puts "Warning: #{included_path} is skipped. It can be used only after Git Clone workflow step."
   end
@@ -201,10 +226,11 @@ unless ac_token_id.empty?
   response = Net::HTTP.get(uri)
   unless response.empty?
     puts 'Uploading cache...'
-    signed = JSON.parse(response)
-    puts signed['putUrl']
 
+    signed = JSON.parse(response)
     ENV['AC_CACHE_PUT_URL'] = signed['putUrl']
-    run_command_with_log("curl -0 -X PUT -H \"Content-Type: application/zip\" --upload-file #{zipped} $AC_CACHE_PUT_URL")
+    puts ENV['AC_CACHE_PUT_URL']
+    curl = 'curl -0 -X PUT -H "Content-Type: application/zip"'
+    run_command_with_log("#{curl} --upload-file #{zipped} $AC_CACHE_PUT_URL")
   end
 end

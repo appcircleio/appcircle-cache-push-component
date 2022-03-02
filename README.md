@@ -5,14 +5,14 @@ Uploads user selected files and folders to Appcircle cache.
 Required Input Variables
 
 - `AC_CACHE_LABEL`: User defined cache label to identify one cache from others. Both cache push and pull steps should have the same value to match.
-- `AC_CACHE_INCLUDED_PATHS`: Specifies the files and folder which should be in cache. Multiple glob patterns can be defined with colon seperated. For example; .gradle:app/build
+- `AC_CACHE_INCLUDED_PATHS`: Specifies the files and folders which should be in cache. Multiple glob patterns can be provided as a colon-separated list. For example; .gradle:app/build
 - `AC_TOKEN_ID`: System generated token used for getting signed url. Zipped cache file is uploaded to signed url.
 - `ASPNETCORE_CALLBACK_URL`: System generated callback url for signed url web service. It's different for various environments.
 
 Optional Input Variables
 
-- `AC_CACHE_EXCLUDED_PATHS`: Specifies the files and folder which should be ignored from cache. Multiple glob patterns can be defined with colon seperated. For example; .gradle/*.lock:*.apk
-- `AC_REPOSITORY_DIR`: Cloned git repository path. Included and excluded paths are defined relative to cloned repository, except `~` prefixed paths.
+- `AC_CACHE_EXCLUDED_PATHS`: Specifies the files and folders which should be ignored from cache. Multiple glob patterns can be provided as a colon-separated list. For example; .gradle/*.lock:*.apk
+- `AC_REPOSITORY_DIR`: Cloned git repository path. Included and excluded paths are defined relative to cloned repository, except `~/`, `/` or environment variable prefixed paths. See following sections for more details.
 
 ## Included & Excluded Paths
 
@@ -22,7 +22,9 @@ Also we have some keywords or characters for special use cases, especially for s
 
 ### System vs. Repository
 
-In order to identify between a repository resource and a system resource, cache step checks prefix of the given pattern. Resource word, used in the document, means files or folders in this context.
+In order to identify between a repository resource and a system resource, cache step checks prefix for each given pattern.
+
+Resource word, used in the document, means files or folders in this context.
 
 Repository resources begin with directly glob pattern. They shouldn't be prefixed with `/` or other folder tree characters.
 
@@ -34,12 +36,30 @@ For example:
 
 Repository resources are generated with git clone on most cases. For this reason, take care of step order while using cache and git clone for repository reources.
 
-On the other hand system resources begin with `~/` pattern. These resources are generated on build and on most cases they're not included in repository.
+On the other hand system resources for `$HOME` begin with `~/` pattern. These resources are generated on build and on most cases they're not included in repository.
 
 For example:
 
 - `~/.gradle/` is .gradle folder at $HOME.
 - `~/Library/Caches/CocoaPods` is Cocoapods caches folder at $HOME.
+
+ Also other system-wide resources are reachable with prefix `/`.
+
+---
+
+**Note:** We should be careful with dynamic folder paths which are temporary on builds.
+
+From build to build, their absolute path is changing. For example, `_appcircle_temp` folder's absolute path is `/Volumes/agent-disk/agent/workflow_data/xjr1walp.ikh/_appcircle_temp` on one build and is `/Volumes/agent-disk/agent/workflow_data/y3jdjln4.0kj/_appcircle_temp` on another build.
+
+So, for those kinds of resources, we should prefix include and exclude paths with Appcircle-specific (reserved) environment variables.
+
+For example:
+
+- `$AC_TEMP_DIR/appcircle_build_ios_simulator/SimulatorDerivedData` is simulator derived data resources at `_appcircle_temp`.
+
+See full list of environment variables at [Appcircle docs](https://docs.appcircle.io/environment-variables/appcircle-specific-environment-variables/).
+
+---
 
 ### Glob Patterns
 

@@ -264,7 +264,7 @@ unless ac_token_id.empty?
     
     if get_env_variable('AC_CACHE_PROVIDER').eql?('FILESYSTEM')
       curl = 'curl -0 --location --request PUT'
-      run_command_with_log("#{curl} $AC_CACHE_PUT_URL --form 'file=@\"#{zipped}\"'")
+      run_command_with_log("#{curl} '#{ENV['AC_CACHE_PUT_URL']}' --form 'file=@\"#{zipped}\"'")
     else
       curl = 'curl -0 -X PUT -H "Content-Type: application/zip"'
       run_command_with_log("#{curl} --upload-file #{zipped} $AC_CACHE_PUT_URL")

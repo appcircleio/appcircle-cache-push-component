@@ -140,14 +140,6 @@ def cache_path(base_path, included_path, excluded_paths, env_dirs)
   zip_file
 end
 
-def home
-  if OS.mac?
-    ENV['HOME']
-  else
-    '/setup'
-  end
-end
-
 def search_env_dirs(path, env_dirs)
   return path if env_dirs.key?(path)
 
@@ -209,7 +201,7 @@ ac_cache_included_paths.split(':').each do |included_path|
   zip_file = nil
   if included_path.start_with?('~/')
     included_path = included_path[('~/'.length)..-1]
-    zip_file = cache_path(home, included_path, excluded_paths['~/'], env_dirs)
+    zip_file = cache_path(ENV['HOME'], included_path, excluded_paths['~/'], env_dirs)
   elsif included_path.start_with?('/')
     base_path = find_base_path(included_path, env_dirs)
     next unless base_path
@@ -261,7 +253,14 @@ unless ac_token_id.empty?
     signed = JSON.parse(response)
     ENV['AC_CACHE_PUT_URL'] = signed['putUrl']
     puts ENV['AC_CACHE_PUT_URL']
-    curl = 'curl -0 -X PUT -H "Content-Type: application/zip"'
-    run_command_with_log("#{curl} --upload-file #{zipped} $AC_CACHE_PUT_URL")
+    
+    if get_env_variable('AC_CACHE_PROVIDER').eql?('FILESYSTEM')
+      curl = 'curl -0 --location --request PUT'
+      run_command_with_log("#{curl} '#{ENV['AC_CACHE_PUT_URL']}' --form 'file=@\"#{zipped}\"'")
+    else
+      curl = 'curl -0 -X PUT -H "Content-Type: application/zip"'
+      run_command_with_log("#{curl} --upload-file #{zipped} $AC_CACHE_PUT_URL")
+    end
+
   end
 end

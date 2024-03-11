@@ -130,7 +130,7 @@ def cache_path(base_path, included_path, excluded_paths, env_dirs)
   base_path = "/#{env_dirs[base_path]}" if env_dirs.key?(base_path)
   zip_file = "#{cwd}/#{@cache}#{base_path}/#{included_path.gsub('/', '_')}.zip"
   system("mkdir -p #{cwd}/#{@cache}#{base_path}")
-  zip = "zip -r -FS #{zip_file}"
+  zip = "zip -r -9 -FS #{zip_file}"
   zip = add_includes(paths, zip)
   zip = add_excludes(excluded_paths, zip)
   zip = add_log_file("#{ac_output_dir}/#{@cache}#{base_path}", "#{included_path.gsub('/', '_')}.zip.log", zip)
@@ -226,7 +226,7 @@ end
 system("find #{@cache} -empty -type d -delete")
 
 run_command("[ -s #{zipped} ] || rm -f #{zipped}")
-run_command_with_log("zip -r -9 -FS #{zipped} #{@cache}")
+run_command_with_log("zip -r -0 -FS #{zipped} #{@cache}")
 run_command("ls -lh #{zipped}")
 
 if File.exist?("#{zipped}.md5")

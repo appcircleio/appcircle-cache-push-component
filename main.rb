@@ -248,8 +248,9 @@ unless ac_token_id.empty?
   puts ws_signed_url
 
   uri = URI(ws_signed_url)
-  response = Net::HTTP.get(uri)
-  unless response.empty?
+  response = Net::HTTP.get_response(uri)
+
+  if response.is_a?(Net::HTTPSuccess)
     puts 'Uploading cache...'
 
     signed = JSON.parse(response)
@@ -274,6 +275,12 @@ unless ac_token_id.empty?
 
       run_command_with_log(curl_cmd)
     end
-
+  elsif response.code.to_i >= 400
+    abort_with0("Failed to get signed URL. " +
+      "HTTP status code: '#{response.code}' - message: '#{response.message}'. " +
+      "Signed URL details response: '#{response.body}'."
+    )
+  else
+    abort_with0("Failed to get signed URL.")
   end
 end

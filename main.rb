@@ -253,7 +253,7 @@ unless ac_token_id.empty?
   if response.is_a?(Net::HTTPSuccess)
     puts 'Uploading cache...'
 
-    signed = JSON.parse(response)
+    signed = JSON.parse(response.body)
     ENV['AC_CACHE_UPLOAD_URL'] = signed['uploadInformation']['uploadUrl']
     puts ENV['AC_CACHE_UPLOAD_URL']
 

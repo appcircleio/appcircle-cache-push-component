@@ -242,25 +242,45 @@ end
 unless ac_token_id.empty?
   puts ''
 
-  ws_signed_url = "#{signed_url_api}&cacheKey=#{ac_cache_label.gsub('/', '_')}&tokenId=#{ac_token_id}"
+  file_size = File.size(zipped)
+  safe_label = ac_cache_label.gsub('/', '_')
+  ws_signed_url = "#{signed_url_api}&cacheKey=#{safe_label}&tokenId=#{ac_token_id}&fileSize=#{file_size}"
   puts ws_signed_url
 
   uri = URI(ws_signed_url)
-  response = Net::HTTP.get(uri)
-  unless response.empty?
+  response = Net::HTTP.get_response(uri)
+
+  if response.is_a?(Net::HTTPSuccess)
     puts 'Uploading cache...'
 
-    signed = JSON.parse(response)
-    ENV['AC_CACHE_PUT_URL'] = signed['putUrl']
-    puts ENV['AC_CACHE_PUT_URL']
-    
+    signed = JSON.parse(response.body)
+    ENV['AC_CACHE_UPLOAD_URL'] = signed['uploadInformation']['uploadUrl']
+    puts ENV['AC_CACHE_UPLOAD_URL']
+
+    http_method = signed['uploadInformation']['configuration']['httpMethod']
+    sign_params = signed['uploadInformation']['configuration']['signParameters']
+
     if get_env_variable('AC_CACHE_PROVIDER').eql?('FILESYSTEM')
       curl = 'curl -0 --location --request PUT'
-      run_command_with_log("#{curl} '#{ENV['AC_CACHE_PUT_URL']}' --form 'file=@\"#{zipped}\"'")
+      run_command_with_log("#{curl} '#{ENV['AC_CACHE_UPLOAD_URL']}' --form 'file=@\"#{zipped}\"'")
     else
-      curl = 'curl -0 -X PUT -H "Content-Type: application/zip"'
-      run_command_with_log("#{curl} --upload-file #{zipped} $AC_CACHE_PUT_URL")
-    end
+      form_data = sign_params.map { |k, v| "--form '#{k}=\"#{v}\"'" }.join(' ') if http_method == "POST"
+      curl_cmd = [
+        "curl -0 -X #{http_method}",
+        "-H 'Content-Type: application/zip'",
+        "--upload-file #{zipped}",
+        "$AC_CACHE_UPLOAD_URL",
+        form_data
+      ].compact.join(' ')
 
+      run_command_with_log(curl_cmd)
+    end
+  elsif response.code.to_i >= 400
+    abort_with0("Failed to get signed URL. " +
+      "HTTP status code: '#{response.code}' - message: '#{response.message}'. " +
+      "Signed URL details response: '#{response.body}'."
+    )
+  else
+    abort_with0("Failed to get signed URL.")
   end
 end

@@ -264,14 +264,20 @@ unless ac_token_id.empty?
       curl = 'curl -0 --location --request PUT'
       run_command_with_log("#{curl} '#{ENV['AC_CACHE_UPLOAD_URL']}' --form 'file=@\"#{zipped}\"'")
     else
-      form_data = sign_params.map { |k, v| "--form '#{k}=\"#{v}\"'" }.join(' ') if http_method == "POST"
-      curl_cmd = [
-        "curl -0 -X #{http_method}",
-        "-H 'Content-Type: application/zip'",
-        "--upload-file #{zipped}",
-        "$AC_CACHE_UPLOAD_URL",
-        form_data
-      ].compact.join(' ')
+      curl_base = ["curl -0 -X #{http_method}"]
+      url_part = ["$AC_CACHE_UPLOAD_URL"]
+
+      if http_method == "POST"
+        form_data = sign_params.map { |k, v| "--form '#{k}=\"#{v}\"'" }
+        form_data << "--form 'file=@#{zipped}'"
+        curl_cmd = (curl_base + url_part + form_data).join(' ')
+      else
+        upload_part = [
+          "-H 'Content-Type: application/zip'",
+          "--upload-file #{zipped}"
+        ]
+        curl_cmd = (curl_base + upload_part + url_part).join(' ')
+      end
 
       run_command_with_log(curl_cmd)
     end

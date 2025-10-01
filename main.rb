@@ -4,6 +4,7 @@ require 'json'
 require 'os'
 require 'digest'
 require 'set'
+require 'shellwords'
 
 def get_env_variable(key)
   return nil if ENV[key].nil? || ENV[key].strip.empty?
@@ -31,10 +32,20 @@ def abort_with0(message)
   exit 0
 end
 
+def validate_no_prohibited_chars(value)
+    return if value.nil? || value.empty?
+    
+    if value.match?(/[\{\}\\ \?#\[\]]/)
+      abort_with0("AC_CACHE_LABEL contains prohibited characters. " \
+                  "The following characters are not allowed: { } \\ space ? # [ ]")
+    end
+end
+
 ac_cache_included_paths = get_env_variable('AC_CACHE_INCLUDED_PATHS') || abort_with0('Included paths must be defined.')
 ac_cache_excluded_paths = get_env_variable('AC_CACHE_EXCLUDED_PATHS') || ''
 ac_repository_path = get_env_variable('AC_REPOSITORY_DIR')
 ac_cache_label = get_env_variable('AC_CACHE_LABEL') || abort_with0('Cache label path must be defined.')
+validate_no_prohibited_chars(ac_cache_label)
 
 ac_token_id = get_env_variable('AC_TOKEN_ID') || abort_with0('AC_TOKEN_ID env variable must be set when build started.')
 ac_callback_url = get_env_variable('AC_CALLBACK_URL') ||
@@ -99,15 +110,15 @@ end
 
 def add_log_file(folder, file, zip)
   if ac_output_dir
-    system("mkdir -p #{folder}")
-    zip += " > #{folder}/#{file}"
+    system("mkdir", "-p", folder)
+    zip += " > #{Shellwords.escape("#{folder}/#{file}")}"
   end
   zip
 end
 
 def run_zip(zip_file, zip)
   run_command_with_log(zip)
-  run_command("ls -lh #{zip_file}")
+  run_command("ls -lh #{Shellwords.escape(zip_file)}")
 end
 
 def cache_path(base_path, included_path, excluded_paths, env_dirs)
@@ -129,8 +140,9 @@ def cache_path(base_path, included_path, excluded_paths, env_dirs)
 
   base_path = "/#{env_dirs[base_path]}" if env_dirs.key?(base_path)
   zip_file = "#{cwd}/#{@cache}#{base_path}/#{included_path.gsub('/', '_')}.zip"
-  system("mkdir -p #{cwd}/#{@cache}#{base_path}")
-  zip = "zip -r -FS #{zip_file}"
+  system("mkdir -p #{Shellwords.escape("#{cwd}/#{@cache}#{base_path}")}")
+  zip = "zip -r -FS #{Shellwords.escape(zip_file)}"
+  
   zip = add_includes(paths, zip)
   zip = add_excludes(excluded_paths, zip)
   zip = add_log_file("#{ac_output_dir}/#{@cache}#{base_path}", "#{included_path.gsub('/', '_')}.zip.log", zip)
@@ -223,11 +235,11 @@ Dir.glob("#{@cache}/**/*.zip", File::FNM_DOTMATCH).each do |zip_file|
     puts "Info: #{zip_file} is not in uptodate includes. Removed."
   end
 end
-system("find #{@cache} -empty -type d -delete")
+system("find", @cache, "-empty", "-type", "d", "-delete")
 
-run_command("[ -s #{zipped} ] || rm -f #{zipped}")
-run_command_with_log("zip -r -0 -FS #{zipped} #{@cache}")
-run_command("ls -lh #{zipped}")
+run_command("[ -s #{Shellwords.escape(zipped)} ] || rm -f #{Shellwords.escape(zipped)}")
+run_command_with_log("zip -r -0 -FS #{Shellwords.escape(zipped)} #{Shellwords.escape(@cache)}")
+run_command("ls -lh #{Shellwords.escape(zipped)}")
 
 if File.exist?("#{zipped}.md5")
   pulled_md5sum = File.open("#{zipped}.md5", 'r', &:readline).strip
@@ -244,6 +256,11 @@ unless ac_token_id.empty?
 
   file_size = File.size(zipped)
   safe_label = ac_cache_label.gsub('/', '_')
+
+  if !safe_label.ascii_only? || safe_label.match?(/[\/\?%&#\s]/)
+    safe_label = URI.encode_www_form_component(safe_label)
+  end
+
   ws_signed_url = "#{signed_url_api}&cacheKey=#{safe_label}&tokenId=#{ac_token_id}&fileSize=#{file_size}"
   puts ws_signed_url
 
@@ -262,19 +279,19 @@ unless ac_token_id.empty?
 
     if get_env_variable('AC_CACHE_PROVIDER').eql?('FILESYSTEM')
       curl = 'curl -0 --location --request PUT'
-      run_command_with_log("#{curl} '#{ENV['AC_CACHE_UPLOAD_URL']}' --form 'file=@\"#{zipped}\"'")
+      run_command_with_log("#{curl} '#{ENV['AC_CACHE_UPLOAD_URL']}' --form 'file=@#{Shellwords.escape(zipped)}'")
     else
       curl_base = ["curl -0 -X #{http_method}"]
       url_part = ["$AC_CACHE_UPLOAD_URL"]
 
       if http_method == "POST"
         form_data = sign_params.map { |k, v| "--form '#{k}=\"#{v}\"'" }
-        form_data << "--form 'file=@#{zipped}'"
+        form_data << "--form 'file=@#{Shellwords.escape(zipped)}'"
         curl_cmd = (curl_base + url_part + form_data).join(' ')
       else
         upload_part = [
           "-H 'Content-Type: application/zip'",
-          "--upload-file #{zipped}"
+          "--upload-file #{Shellwords.escape(zipped)}"
         ]
         curl_cmd = (curl_base + upload_part + url_part).join(' ')
       end

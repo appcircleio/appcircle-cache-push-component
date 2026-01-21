@@ -199,6 +199,7 @@ ac_cache_included_paths.split(':').each do |included_path|
   next if included_path.empty?
 
   zip_file = nil
+  included_path = included_path.gsub(/\$(\w+)/) { ENV[$1] }
   if included_path.start_with?('~/')
     included_path = included_path[('~/'.length)..-1]
     zip_file = cache_path(ENV['HOME'], included_path, excluded_paths['~/'], env_dirs)

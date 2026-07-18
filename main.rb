@@ -35,6 +35,7 @@ ac_cache_included_paths = get_env_variable('AC_CACHE_INCLUDED_PATHS') || abort_w
 ac_cache_excluded_paths = get_env_variable('AC_CACHE_EXCLUDED_PATHS') || ''
 ac_repository_path = get_env_variable('AC_REPOSITORY_DIR')
 ac_cache_label = get_env_variable('AC_CACHE_LABEL') || abort_with0('Cache label path must be defined.')
+ac_cache_label = ac_cache_label.gsub(%r{[^A-Za-z0-9_/-]}, '_')
 
 ac_token_id = get_env_variable('AC_TOKEN_ID') || abort_with0('AC_TOKEN_ID env variable must be set when build started.')
 ac_callback_url = get_env_variable('AC_CALLBACK_URL') ||

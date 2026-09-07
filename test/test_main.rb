@@ -181,6 +181,10 @@ end
 
 # Every ENV key main.rb reads. Passing nil to Open3.capture3 unsets the key in
 # the child, isolating the subprocess tests from the ambient environment.
+# Where the subprocess runs drop their Coverage dumps (merged in the report).
+SUBPROCESS_COVERAGE_DIR = Dir.mktmpdir('cache_push_cov')
+at_exit { FileUtils.rm_rf(SUBPROCESS_COVERAGE_DIR) }
+
 MAIN_ENV_KEYS = %w[
   HOME
   AC_CACHE_INCLUDED_PATHS
@@ -194,6 +198,7 @@ MAIN_ENV_KEYS = %w[
   AC_CACHE_UPLOAD_URL
   _TEST_HTTP_CODE
   _TEST_HTTP_BODY
+  _TEST_COVERAGE_DIR
 ].freeze
 
 # Preloaded into the child via RUBYOPT=-r<file>. It replaces Kernel#system and
@@ -201,6 +206,22 @@ MAIN_ENV_KEYS = %w[
 # opens a network connection. Every stubbed call is echoed to stdout so the
 # tests can assert the composed command strings.
 MAIN_STUB_SOURCE = <<~'RUBY_SRC'
+  # Coverage for the guarded main block: start before main.rb loads and dump
+  # the per-line counts on exit so the parent can merge them into its report.
+  if ENV['_TEST_COVERAGE_DIR'] && !ENV['_TEST_COVERAGE_DIR'].empty?
+    require 'coverage'
+    require 'json'
+    Coverage.start
+    at_exit do
+      result = Coverage.result
+      path   = result.keys.find { |k| k.end_with?('/main.rb') }
+      if path
+        file = File.join(ENV['_TEST_COVERAGE_DIR'], "cov-#{Process.pid}-#{rand(1_000_000)}.json")
+        File.write(file, JSON.generate({ 'path' => path, 'lines' => result[path] }))
+      end
+    end
+  end
+
   require 'net/http'
 
   module Kernel
@@ -249,6 +270,7 @@ def run_main(env = {}, chdir: nil)
 
     clean_env = MAIN_ENV_KEYS.to_h { |k| [k, nil] }.merge(env)
     clean_env['RUBYOPT'] = ["-r#{stub_path}", ENV['RUBYOPT']].compact.join(' ')
+    clean_env['_TEST_COVERAGE_DIR'] = SUBPROCESS_COVERAGE_DIR
 
     Open3.capture3(clean_env, "ruby #{MAIN_RB}", chdir: chdir || tmp)
   end
@@ -1066,6 +1088,47 @@ RSpec.describe 'main.rb end-to-end (subprocess, stubbed toolchain and network)' 
     expect(out).to include('cacheKey=feat_x_y_cache')
   end
 
+  it 'resolves an absolute include through its AC_ env dir and zips relative to it' do
+    FileUtils.mkdir_p(File.join(tmpdir, 'temp', 'DerivedData'))
+    File.write(File.join(tmpdir, 'temp', 'DerivedData', 'x.o'), 'o')
+    out, err, status = run_main(
+      env.merge('AC_TEMP_DIR' => File.join(tmpdir, 'temp'),
+                'AC_CACHE_INCLUDED_PATHS' => "#{tmpdir}/temp/DerivedData",
+                '_TEST_HTTP_BODY' => signed_response_body),
+      chdir: tmpdir
+    )
+
+    expect(status.exitstatus).to eq(0), "stdout:\n#{out}\nstderr:\n#{err}"
+    expect(out).to include("Include: DerivedData in #{tmpdir}/temp")
+    expect(out).to include("[stub-system] zip -r -FS #{tmpdir}/ac_cache/main/cache/AC_TEMP_DIR/DerivedData.zip DerivedData")
+  end
+
+  it 'zips an absolute include without an env dir under its literal parent path' do
+    FileUtils.mkdir_p(File.join(tmpdir, 'opt', 'tools', 'bin'))
+    out, err, status = run_main(
+      env.merge('AC_CACHE_INCLUDED_PATHS' => "#{tmpdir}/opt/tools/bin",
+                '_TEST_HTTP_BODY' => signed_response_body),
+      chdir: tmpdir
+    )
+
+    expect(status.exitstatus).to eq(0), "stdout:\n#{out}\nstderr:\n#{err}"
+    expect(out).to include("Include: bin in #{tmpdir}/opt/tools")
+    expect(out).to include("[stub-system] zip -r -FS #{tmpdir}/ac_cache/main/cache#{tmpdir}/opt/tools/bin.zip bin")
+  end
+
+  it 'removes pulled zips that are no longer in the include list' do
+    stale = File.join(tmpdir, 'ac_cache', 'main', 'cache', 'AC_REPOSITORY_DIR', 'old.zip')
+    FileUtils.mkdir_p(File.dirname(stale))
+    File.write(stale, 'stale')
+    out, err, status = run_main(env.merge('_TEST_HTTP_BODY' => signed_response_body), chdir: tmpdir)
+
+    expect(status.exitstatus).to eq(0), "stdout:\n#{out}\nstderr:\n#{err}"
+    expect(out).to include('[stub-system] rm -f ac_cache/main/cache/AC_REPOSITORY_DIR/old.zip')
+    expect(out).to include('Info: ac_cache/main/cache/AC_REPOSITORY_DIR/old.zip is not in uptodate includes. Removed.')
+    expect(out).not_to include('rm -f ac_cache/main/cache/AC_REPOSITORY_DIR/src.zip')
+    expect(out).to include('[stub-system] find ac_cache/main/cache -empty -type d -delete')
+  end
+
   it 'warns and skips repository-relative includes when AC_REPOSITORY_DIR is unset' do
     out, _err, status = run_main(
       env.merge('AC_REPOSITORY_DIR' => nil, '_TEST_HTTP_BODY' => signed_response_body),
@@ -1079,9 +1142,9 @@ RSpec.describe 'main.rb end-to-end (subprocess, stubbed toolchain and network)' 
 end
 
 # ─── Coverage Report ──────────────────────────────────────────────────────────
-# Lines outside the `if __FILE__ == $PROGRAM_NAME` blocks are the function
-# definitions exercised in-process. The guarded main blocks only run in the
-# subprocess tests, which Coverage cannot instrument, so they are reported apart.
+# The guarded main block only runs in the `ruby main.rb` subprocesses, which
+# in-process Coverage cannot see. Each child starts Coverage through the
+# RUBYOPT-preloaded stub and dumps its counts; they are merged here.
 def print_coverage_report
   return unless defined?(Coverage) && Coverage.running?
 
@@ -1094,45 +1157,37 @@ def print_coverage_report
   main_path = result.keys.find { |p| p&.end_with?('main.rb') }
   return puts("\nCoverage: main.rb not found in results") unless main_path
 
-  data = result[main_path]
+  data = result[main_path].dup
+  dumps = Dir.glob(File.join(SUBPROCESS_COVERAGE_DIR, 'cov-*.json'))
+  dumps.each do |file|
+    child = JSON.parse(File.read(file))['lines']
+    child.each_with_index do |count, i|
+      next if count.nil? || data[i].nil?
 
-  # Mark every line that sits inside an `if __FILE__ == $PROGRAM_NAME` block
-  # (opened at column 0 and closed by a bare `end` at column 0).
-  in_main = []
-  inside  = false
-  File.readlines(main_path).each do |line|
-    inside = true if line.start_with?('if __FILE__ == $PROGRAM_NAME')
-    in_main << inside
-    inside = false if inside && line.rstrip == 'end'
+      data[i] += count
+    end
   end
 
   lines     = data.each_with_index.reject { |c, _| c.nil? }
-  functions = lines.reject { |_, i| in_main[i] }
-  main_blk  = lines.select { |_, i| in_main[i] }
+  total     = lines.size
+  covered   = lines.count { |c, _| c.to_i > 0 }
+  pct       = total.positive? ? (covered * 100.0 / total).round(1) : 100.0
+  uncovered = lines.select { |c, _| c.to_i == 0 }.map { |_, i| i + 1 }
 
-  report = lambda do |label, subset|
-    total   = subset.size
-    covered = subset.count { |c, _| c.to_i > 0 }
-    pct     = total.positive? ? (covered * 100.0 / total).round(1) : 100.0
-    color   = pct == 100 ? "\e[32;1m" : pct >= 80 ? "\e[33m" : "\e[31m"
-    filled  = (pct / 5).round
-    bar     = "\e[32m" + '█' * filled + "\e[90m" + '░' * (20 - filled) + "\e[0m"
-    puts "  #{label.ljust(22)} #{bar}  #{color}#{pct}%\e[0m  (#{covered}/#{total} lines)"
-    subset.select { |c, _| c.to_i == 0 }.map { |_, i| i + 1 }
-  end
+  color = pct == 100 ? "\e[32;1m" : pct >= 80 ? "\e[33m" : "\e[31m"
+  bar_filled = (pct / 5).round
+  bar = "\e[32m" + '█' * bar_filled + "\e[90m" + '░' * (20 - bar_filled) + "\e[0m"
 
   puts "\n\e[90m#{'═' * 72}\e[0m"
-  puts '  Coverage Report (main.rb)'
+  puts '  Coverage Report'
   puts "\e[90m#{'─' * 72}\e[0m"
-  uncovered = report.call('functions', functions)
+  puts "  main.rb  #{bar}  #{color}#{pct}%\e[0m  (#{covered}/#{total} lines)"
+  puts "  \e[90mmerged from this process + #{dumps.size} subprocess run(s)\e[0m"
   if uncovered.any? && uncovered.size <= 20
     puts "  Uncovered lines: \e[90m#{uncovered.join(', ')}\e[0m"
   elsif uncovered.any?
     puts "  Uncovered lines: \e[90m#{uncovered.first(15).join(', ')} … (+#{uncovered.size - 15} more)\e[0m"
   end
-  report.call('main block (in-proc)', main_blk)
-  puts "  \e[90mThe main block is covered by the subprocess tests, which are not instrumented.\e[0m"
-  report.call('total', lines)
   puts "\e[90m#{'═' * 72}\e[0m"
 end
 

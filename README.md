@@ -178,3 +178,14 @@ As an alternative method, other "gradle*" prefixed files can be added with a spe
   gradle/wrapper/gradle-wrapper.jar
   gradle/wrapper/gradle-wrapper.properties
 ```
+
+## Running tests
+
+Requires the [RSpec](https://rspec.info) gem and the Ruby standard library (Coverage, Open3). No Gemfile or Bundler needed.
+
+```bash
+gem install rspec   # once
+ruby test/test_main.rb
+```
+
+The suite covers every function in `main.rb` in-process and runs the full script in a subprocess with the `zip`/`curl` toolchain and the signed-URL HTTP call stubbed, so no real command is executed and no network is used. A pass/fail summary and a coverage report are printed at the end of each run.

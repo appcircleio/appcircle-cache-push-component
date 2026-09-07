@@ -1,7 +1,11 @@
 require 'English'
 require 'net/http'
 require 'json'
-require 'os'
+begin
+  require 'os'
+rescue LoadError
+  # optional gem; nothing in this script depends on it
+end
 require 'digest'
 require 'set'
 
@@ -31,40 +35,42 @@ def abort_with0(message)
   exit 0
 end
 
-ac_cache_included_paths = get_env_variable('AC_CACHE_INCLUDED_PATHS') || abort_with0('Included paths must be defined.')
-ac_cache_excluded_paths = get_env_variable('AC_CACHE_EXCLUDED_PATHS') || ''
-ac_repository_path = get_env_variable('AC_REPOSITORY_DIR')
-ac_cache_label = get_env_variable('AC_CACHE_LABEL') || abort_with0('Cache label path must be defined.')
-ac_cache_label = ac_cache_label.gsub(%r{[^A-Za-z0-9_/-]}, '_')
-
-ac_token_id = get_env_variable('AC_TOKEN_ID') || abort_with0('AC_TOKEN_ID env variable must be set when build started.')
-ac_callback_url = get_env_variable('AC_CALLBACK_URL') ||
-                  abort_with0('AC_CALLBACK_URL env variable must be set when build started.')
-
 def ac_output_dir
   out_dir = get_env_variable('AC_OUTPUT_DIR')
   out_dir && Dir.exist?(out_dir) ? out_dir : nil
 end
 
-signed_url_api = "#{ac_callback_url}?action=getCacheUrls"
+if __FILE__ == $PROGRAM_NAME
+  ac_cache_included_paths = get_env_variable('AC_CACHE_INCLUDED_PATHS') || abort_with0('Included paths must be defined.')
+  ac_cache_excluded_paths = get_env_variable('AC_CACHE_EXCLUDED_PATHS') || ''
+  ac_repository_path = get_env_variable('AC_REPOSITORY_DIR')
+  ac_cache_label = get_env_variable('AC_CACHE_LABEL') || abort_with0('Cache label path must be defined.')
+  ac_cache_label = ac_cache_label.gsub(%r{[^A-Za-z0-9_/-]}, '_')
 
-# check dependencies
-run_command('zip -v |head -2')
-run_command('curl --version |head -1')
+  ac_token_id = get_env_variable('AC_TOKEN_ID') || abort_with0('AC_TOKEN_ID env variable must be set when build started.')
+  ac_callback_url = get_env_variable('AC_CALLBACK_URL') ||
+                    abort_with0('AC_CALLBACK_URL env variable must be set when build started.')
 
-@cache = "ac_cache/#{ac_cache_label}"
-zipped = "ac_cache/#{ac_cache_label.gsub('/', '_')}.zip"
+  signed_url_api = "#{ac_callback_url}?action=getCacheUrls"
 
-puts '--- Inputs:'
-puts ac_cache_label
-puts ac_cache_included_paths
-puts ac_cache_excluded_paths
-puts ac_repository_path
-puts '-----------'
+  # check dependencies
+  run_command('zip -v |head -2')
+  run_command('curl --version |head -1')
 
-env_dirs = Hash.new('')
-ENV.each_pair do |k, v|
-  env_dirs[v] = k if k.start_with?('AC_') && File.directory?(v)
+  @cache = "ac_cache/#{ac_cache_label}"
+  zipped = "ac_cache/#{ac_cache_label.gsub('/', '_')}.zip"
+
+  puts '--- Inputs:'
+  puts ac_cache_label
+  puts ac_cache_included_paths
+  puts ac_cache_excluded_paths
+  puts ac_repository_path
+  puts '-----------'
+
+  env_dirs = Hash.new('')
+  ENV.each_pair do |k, v|
+    env_dirs[v] = k if k.start_with?('AC_') && File.directory?(v)
+  end
 end
 
 def expand_exclude(pattern)
@@ -191,103 +197,105 @@ def get_excluded_paths(paths, env_dirs)
   excludes
 end
 
-excluded_paths = get_excluded_paths(ac_cache_excluded_paths, env_dirs)
-puts excluded_paths
+if __FILE__ == $PROGRAM_NAME
+  excluded_paths = get_excluded_paths(ac_cache_excluded_paths, env_dirs)
+  puts excluded_paths
 
-uptodate_zips = Set.new([])
+  uptodate_zips = Set.new([])
 
-ac_cache_included_paths.split(':').each do |included_path|
-  next if included_path.empty?
+  ac_cache_included_paths.split(':').each do |included_path|
+    next if included_path.empty?
 
-  zip_file = nil
-  if included_path.start_with?('~/')
-    included_path = included_path[('~/'.length)..-1]
-    zip_file = cache_path(ENV['HOME'], included_path, excluded_paths['~/'], env_dirs)
-  elsif included_path.start_with?('/')
-    base_path = find_base_path(included_path, env_dirs)
-    next unless base_path
+    zip_file = nil
+    if included_path.start_with?('~/')
+      included_path = included_path[('~/'.length)..-1]
+      zip_file = cache_path(ENV['HOME'], included_path, excluded_paths['~/'], env_dirs)
+    elsif included_path.start_with?('/')
+      base_path = find_base_path(included_path, env_dirs)
+      next unless base_path
 
-    zip_file = cache_path(base_path, included_path[(base_path.length + 1)..-1], excluded_paths[base_path], env_dirs)
-  elsif ac_repository_path
-    zip_file = cache_path(ac_repository_path, included_path, excluded_paths[''], env_dirs)
-  else
-    puts "Warning: #{included_path} is skipped. It can be used only after Git Clone workflow step."
-  end
-
-  uptodate_zips.add(zip_file.sub("#{Dir.pwd}/", '')) if zip_file
-end
-
-# remove dead zips (includes) from pulled zips if not in uptodate set
-Dir.glob("#{@cache}/**/*.zip", File::FNM_DOTMATCH).each do |zip_file|
-  unless uptodate_zips.include?(zip_file)
-    system("rm -f #{zip_file}")
-    puts "Info: #{zip_file} is not in uptodate includes. Removed."
-  end
-end
-system("find #{@cache} -empty -type d -delete")
-
-run_command("[ -s #{zipped} ] || rm -f #{zipped}")
-run_command_with_log("zip -r -0 -FS #{zipped} #{@cache}")
-run_command("ls -lh #{zipped}")
-
-if File.exist?("#{zipped}.md5")
-  pulled_md5sum = File.open("#{zipped}.md5", 'r', &:readline).strip
-  pushed_md5sum = Digest::MD5.file(zipped).hexdigest
-  puts "#{pulled_md5sum} =? #{pushed_md5sum}"
-  if pulled_md5sum == pushed_md5sum
-    puts 'Cache is the same as pulled one. No need to upload.'
-    exit 0
-  end
-end
-
-unless ac_token_id.empty?
-  puts ''
-
-  file_size = File.size(zipped)
-  safe_label = ac_cache_label.gsub('/', '_')
-  ws_signed_url = "#{signed_url_api}&cacheKey=#{safe_label}&tokenId=#{ac_token_id}&fileSize=#{file_size}"
-  puts ws_signed_url
-
-  uri = URI(ws_signed_url)
-  response = Net::HTTP.get_response(uri)
-
-  if response.is_a?(Net::HTTPSuccess)
-    puts 'Uploading cache...'
-
-    signed = JSON.parse(response.body)
-    ENV['AC_CACHE_UPLOAD_URL'] = signed['uploadInformation']['uploadUrl']
-    puts ENV['AC_CACHE_UPLOAD_URL']
-
-    http_method = signed['uploadInformation']['configuration']['httpMethod']
-    sign_params = signed['uploadInformation']['configuration']['signParameters']
-
-    if get_env_variable('AC_CACHE_PROVIDER').eql?('FILESYSTEM')
-      curl = 'curl -0 --location --request PUT'
-      run_command_with_log("#{curl} '#{ENV['AC_CACHE_UPLOAD_URL']}' --form 'file=@\"#{zipped}\"'")
+      zip_file = cache_path(base_path, included_path[(base_path.length + 1)..-1], excluded_paths[base_path], env_dirs)
+    elsif ac_repository_path
+      zip_file = cache_path(ac_repository_path, included_path, excluded_paths[''], env_dirs)
     else
-      curl_base = ["curl -0 -X #{http_method}"]
-      url_part = ["$AC_CACHE_UPLOAD_URL"]
-
-      if http_method == "POST"
-        form_data = sign_params.map { |k, v| "--form '#{k}=\"#{v}\"'" }
-        form_data << "--form 'file=@#{zipped}'"
-        curl_cmd = (curl_base + url_part + form_data).join(' ')
-      else
-        upload_part = [
-          "-H 'Content-Type: application/zip'",
-          "--upload-file #{zipped}"
-        ]
-        curl_cmd = (curl_base + upload_part + url_part).join(' ')
-      end
-
-      run_command_with_log(curl_cmd)
+      puts "Warning: #{included_path} is skipped. It can be used only after Git Clone workflow step."
     end
-  elsif response.code.to_i >= 400
-    abort_with0("Failed to get signed URL. " +
-      "HTTP status code: '#{response.code}' - message: '#{response.message}'. " +
-      "Signed URL details response: '#{response.body}'."
-    )
-  else
-    abort_with0("Failed to get signed URL.")
+
+    uptodate_zips.add(zip_file.sub("#{Dir.pwd}/", '')) if zip_file
+  end
+
+  # remove dead zips (includes) from pulled zips if not in uptodate set
+  Dir.glob("#{@cache}/**/*.zip", File::FNM_DOTMATCH).each do |zip_file|
+    unless uptodate_zips.include?(zip_file)
+      system("rm -f #{zip_file}")
+      puts "Info: #{zip_file} is not in uptodate includes. Removed."
+    end
+  end
+  system("find #{@cache} -empty -type d -delete")
+
+  run_command("[ -s #{zipped} ] || rm -f #{zipped}")
+  run_command_with_log("zip -r -0 -FS #{zipped} #{@cache}")
+  run_command("ls -lh #{zipped}")
+
+  if File.exist?("#{zipped}.md5")
+    pulled_md5sum = File.open("#{zipped}.md5", 'r', &:readline).strip
+    pushed_md5sum = Digest::MD5.file(zipped).hexdigest
+    puts "#{pulled_md5sum} =? #{pushed_md5sum}"
+    if pulled_md5sum == pushed_md5sum
+      puts 'Cache is the same as pulled one. No need to upload.'
+      exit 0
+    end
+  end
+
+  unless ac_token_id.empty?
+    puts ''
+
+    file_size = File.size(zipped)
+    safe_label = ac_cache_label.gsub('/', '_')
+    ws_signed_url = "#{signed_url_api}&cacheKey=#{safe_label}&tokenId=#{ac_token_id}&fileSize=#{file_size}"
+    puts ws_signed_url
+
+    uri = URI(ws_signed_url)
+    response = Net::HTTP.get_response(uri)
+
+    if response.is_a?(Net::HTTPSuccess)
+      puts 'Uploading cache...'
+
+      signed = JSON.parse(response.body)
+      ENV['AC_CACHE_UPLOAD_URL'] = signed['uploadInformation']['uploadUrl']
+      puts ENV['AC_CACHE_UPLOAD_URL']
+
+      http_method = signed['uploadInformation']['configuration']['httpMethod']
+      sign_params = signed['uploadInformation']['configuration']['signParameters']
+
+      if get_env_variable('AC_CACHE_PROVIDER').eql?('FILESYSTEM')
+        curl = 'curl -0 --location --request PUT'
+        run_command_with_log("#{curl} '#{ENV['AC_CACHE_UPLOAD_URL']}' --form 'file=@\"#{zipped}\"'")
+      else
+        curl_base = ["curl -0 -X #{http_method}"]
+        url_part = ["$AC_CACHE_UPLOAD_URL"]
+
+        if http_method == "POST"
+          form_data = sign_params.map { |k, v| "--form '#{k}=\"#{v}\"'" }
+          form_data << "--form 'file=@#{zipped}'"
+          curl_cmd = (curl_base + url_part + form_data).join(' ')
+        else
+          upload_part = [
+            "-H 'Content-Type: application/zip'",
+            "--upload-file #{zipped}"
+          ]
+          curl_cmd = (curl_base + upload_part + url_part).join(' ')
+        end
+
+        run_command_with_log(curl_cmd)
+      end
+    elsif response.code.to_i >= 400
+      abort_with0("Failed to get signed URL. " +
+        "HTTP status code: '#{response.code}' - message: '#{response.message}'. " +
+        "Signed URL details response: '#{response.body}'."
+      )
+    else
+      abort_with0("Failed to get signed URL.")
+    end
   end
 end

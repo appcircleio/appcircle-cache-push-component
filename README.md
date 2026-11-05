@@ -28,7 +28,9 @@ Edge cases: a missing key file logs a warning and pushes; the first push (no sto
 
 ## Compression
 
-When `zstd` is available on the runner, each included path is archived with `tar` and compressed with `zstd -1 -T0` (`.tar.zst`), and the archives are bundled with a plain `tar`. Otherwise the step falls back to `zip`. The uploaded object name is unchanged; Cache Pull detects the format from the file header, so Cache Pull must be updated before Cache Push. Symbolic links are stored as links in the zstd format.
+When `zstd` is available on the runner, each included path is archived with `tar` and compressed with `zstd -1 -T0` (`.tar.zst`), and the archives are bundled with a plain `tar`. Otherwise the step falls back to `zip`. The uploaded object name is unchanged; Cache Pull detects the format from the file header, so Cache Pull must be updated before Cache Push. If an older Cache Pull version is detected in the workflow (it writes only `<bundle>.md5`), Cache Push keeps the zip format so that the older version can still restore the cache.
+
+In the zstd format, an included path that is a symbolic link to a folder is followed and its content is cached (same as zip). Symbolic links inside cached folders are stored as links. On macOS, `COPYFILE_DISABLE=1` is set so that no `._*` metadata files are added. If `tar` reports an error other than GNU tar's "file changed as we read it", the cache is not uploaded.
 
 ## Included & Excluded Paths
 

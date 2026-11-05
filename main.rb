@@ -61,24 +61,39 @@ def command_exists?(name)
   system("command -v #{name} > /dev/null 2>&1")
 end
 
-# zstd is preferred; zip is the fallback for runner images without zstd.
-@use_zstd = command_exists?('zstd') && command_exists?('tar')
-
-# check dependencies
-if @use_zstd
-  run_command('zstd --version')
-  run_command('tar --version |head -1')
-else
-  puts 'Warning: zstd is not available on this runner. Falling back to zip compression.'
-  run_command('zip -v |head -2')
-end
-run_command('curl --version |head -1')
-
 @cache = "ac_cache/#{ac_cache_label}"
 # Remote object name stays "<label>.zip" for backend compatibility. Its content is either a zip
 # (legacy) or a tar bundle; cache pull detects the format from the file header.
 zipped = "ac_cache/#{ac_cache_label.gsub('/', '_')}.zip"
 depkey_file = "#{@cache}/.ac_depkey"
+
+# macOS tar adds AppleDouble "._*" entries for extended attributes unless this is set. They change
+# between builds and break the unchanged-cache check. No effect on GNU tar.
+ENV['COPYFILE_DISABLE'] = '1'
+
+# zstd is preferred; zip is the fallback for runner images without zstd.
+@use_zstd = command_exists?('zstd') && command_exists?('tar')
+
+# An older cache pull writes only "<bundle>.md5" and cannot extract a tar bundle. Keep the zip format
+# in that case, so the next build of this workflow can still restore the cache.
+if @use_zstd && File.exist?("#{zipped}.md5") && !File.exist?("#{zipped}.digest")
+  puts 'Warning: An older Cache Pull version is used in this workflow. Falling back to zip compression ' \
+       'so it can restore the cache. Update Cache Pull to use zstd.'
+  @use_zstd = false
+end
+
+# check dependencies
+if @use_zstd
+  run_command('zstd --version')
+  run_command('tar --version |head -1')
+  # GNU tar exits with 1 only when a file changed while being read. Other tar implementations (bsdtar
+  # on macOS) use 1 for any error, such as an unreadable file.
+  @gnu_tar = `tar --version 2>/dev/null`.include?('GNU tar')
+else
+  puts 'Warning: zstd is not available on this runner. Falling back to zip compression.' unless command_exists?('zstd')
+  run_command('zip -v |head -2')
+end
+run_command('curl --version |head -1')
 
 puts '--- Inputs:'
 puts ac_cache_label
@@ -179,9 +194,14 @@ def collect_entries(included_paths, excluded_paths)
   included_paths.each do |included|
     next unless valid_include?(included)
 
-    if File.directory?(included) && !File.symlink?(included)
-      Find.find(included) do |path|
-        entry = File.directory?(path) && !File.symlink?(path) ? "#{path}/" : path
+    if File.directory?(included)
+      # zip follows an included path that is a symlink to a folder and stores the folder content.
+      # A trailing "/" makes Find and tar resolve the link the same way. Links inside the folder are
+      # still stored as links.
+      root = File.symlink?(included) ? "#{included}/" : included
+      Find.find(root) do |path|
+        is_dir = File.directory?(path) && (path == root || !File.symlink?(path))
+        entry = is_dir && !path.end_with?('/') ? "#{path}/" : path
         entries << path unless excluded_entry?(entry, patterns)
       end
     elsif !excluded_entry?(included, patterns)
@@ -203,8 +223,10 @@ def run_tar_zstd(archive_file, entries)
     e = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     tar_status, zstd_status = statuses
     # GNU tar exits with 1 when a file changed while being read; the archive is still complete.
-    puts "Warning: tar reported changed files while compressing #{archive_file}." if tar_status.exitstatus == 1
-    unless [0, 1].include?(tar_status.exitstatus) && zstd_status.success?
+    # Any other non-zero exit (including 1 from bsdtar) can mean a partial archive, so nothing is uploaded.
+    tolerated = @gnu_tar ? [0, 1] : [0]
+    puts "Warning: tar reported changed files while compressing #{archive_file}." if @gnu_tar && tar_status.exitstatus == 1
+    unless tolerated.include?(tar_status.exitstatus) && zstd_status.success?
       abort_with0("Unexpected exit (tar: #{tar_status.exitstatus}, zstd: #{zstd_status.exitstatus}) " \
                   "while compressing #{archive_file}.")
     end

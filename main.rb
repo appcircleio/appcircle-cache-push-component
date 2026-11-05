@@ -196,10 +196,14 @@ def collect_entries(included_paths, excluded_paths)
 
     if File.directory?(included)
       # zip follows an included path that is a symlink to a folder and stores the folder content.
-      # A trailing "/" makes Find and tar resolve the link the same way. Links inside the folder are
-      # still stored as links.
-      root = File.symlink?(included) ? "#{included}/" : included
+      # A trailing "/" makes Find walk the link target. tar would still store the root itself as a
+      # symlink, so the root entry is left out: its content is stored under the link name, and tar
+      # creates it as a real folder on extract. Links inside the folder are still stored as links.
+      root_is_link = File.symlink?(included)
+      root = root_is_link ? "#{included}/" : included
       Find.find(root) do |path|
+        next if root_is_link && path == root
+
         is_dir = File.directory?(path) && (path == root || !File.symlink?(path))
         entry = is_dir && !path.end_with?('/') ? "#{path}/" : path
         entries << path unless excluded_entry?(entry, patterns)
@@ -243,9 +247,28 @@ def add_log_file(folder, file, zip)
   zip
 end
 
+def zip_file?(file)
+  File.open(file, 'rb') { |f| f.read(2) } == 'PK'
+end
+
+# Returns false when zip has nothing to add (exit 12, every file excluded), like the zstd path.
 def run_zip(zip_file, zip)
-  run_command_with_log(zip)
+  puts "@@[command] #{zip}"
+  s = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  system(zip)
+  e = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  if $CHILD_STATUS.exitstatus == 12
+    puts "Warning: #{zip_file} has no files left after excludes. Skipped."
+    system("rm -f #{zip_file}")
+    return false
+  end
+  unless $CHILD_STATUS.success?
+    puts "@@[error] Unexpected exit with code #{$CHILD_STATUS.exitstatus}. Check logs for details."
+    exit 0
+  end
+  puts "took #{(e - s).round(3)}s"
   run_command("ls -lh #{zip_file}")
+  true
 end
 
 def cache_path(base_path, included_path, excluded_paths, env_dirs)
@@ -286,10 +309,10 @@ def cache_path(base_path, included_path, excluded_paths, env_dirs)
   zip = add_includes(paths, zip)
   zip = add_excludes(excluded_paths, zip)
   zip = add_log_file("#{ac_output_dir}/#{@cache}#{base_path}", "#{included_path.gsub('/', '_')}.zip.log", zip)
-  run_zip(zip_file, zip)
+  zipped_ok = run_zip(zip_file, zip)
 
   Dir.chdir(cwd)
-  zip_file
+  zipped_ok ? zip_file : nil
 end
 
 def search_env_dirs(path, env_dirs)
@@ -410,7 +433,10 @@ if @use_zstd
   system("rm -f #{zipped}")
   run_command_with_log("tar -cf #{zipped} #{@cache}")
 else
-  run_command("[ -s #{zipped} ] || rm -f #{zipped}")
+  # zip -FS updates the pulled bundle in place. The pulled bundle can be empty or a tar bundle written
+  # by a zstd runner (for example, when an older Cache Pull could not extract it); zip cannot update
+  # either, so it is removed first.
+  system("rm -f #{zipped}") unless File.size?(zipped) && zip_file?(zipped)
   run_command_with_log("zip -r -0 -FS #{zipped} #{@cache}")
 end
 run_command("ls -lh #{zipped}")

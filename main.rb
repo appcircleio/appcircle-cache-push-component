@@ -405,7 +405,10 @@ if new_depkey
   File.write(depkey_file, "#{new_depkey}\n")
 else
   # No usable key file, so a stale key from a pulled cache must not be pushed again.
-  File.delete(depkey_file) if File.file?(depkey_file)
+  if File.file?(depkey_file)
+    File.delete(depkey_file)
+    puts 'Info: Stale cache key removed. It is not pushed with this cache.'
+  end
 end
 
 # Digest of the archives inside the cache folder. Cache pull writes the same digest right after it

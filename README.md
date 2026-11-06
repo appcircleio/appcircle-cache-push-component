@@ -11,7 +11,7 @@ Required Input Variables
 
 Optional Input Variables
 
-- `AC_CACHE_EXCLUDED_PATHS`: Specifies the files and folders which should be ignored from cache. Multiple glob patterns can be provided as a colon-separated list. For example; .gradle/*.lock:*.apk
+- `AC_CACHE_EXCLUDED_PATHS`: Specifies the files and folders which should be ignored from cache. Multiple glob patterns can be provided as a colon-separated list. For example; .gradle/*.lock:*.apk. An exclude applies only to includes with the same prefix: a pattern without a prefix (for example `*.lock`) applies only to repository includes, a `~/` pattern only to `~/` includes, and a `/` or environment variable prefixed pattern only to includes under the same base path. For example, to exclude lock files inside a `~/.gradle` include, write `~/.gradle/**/*.lock`.
 - `AC_REPOSITORY_DIR`: Cloned git repository path. Included and excluded paths are defined relative to cloned repository, except `~/`, `/` or environment variable prefixed paths. See following sections for more details.
 - `AC_CACHE_KEY_FILE`: Path to your dependency lock file, relative to the repository root (for example `Podfile.lock`, `gradle/libs.versions.toml`, `yarn.lock`, `pubspec.lock`). Cache push is skipped, before any compression, if this file and the included/excluded paths haven't changed since the last push. Leave empty to always push.
 - `AC_CACHE_PUSH_SKIP`: Set to `true` (for example from a custom script step) to skip cache push unconditionally. Not exposed in the step UI.

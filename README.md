@@ -13,6 +13,24 @@ Optional Input Variables
 
 - `AC_CACHE_EXCLUDED_PATHS`: Specifies the files and folders which should be ignored from cache. Multiple glob patterns can be provided as a colon-separated list. For example; .gradle/*.lock:*.apk
 - `AC_REPOSITORY_DIR`: Cloned git repository path. Included and excluded paths are defined relative to cloned repository, except `~/`, `/` or environment variable prefixed paths. See following sections for more details.
+- `AC_CACHE_KEY_FILE`: Path to your dependency lock file, relative to the repository root (for example `Podfile.lock`, `gradle/libs.versions.toml`, `yarn.lock`, `pubspec.lock`). Cache push is skipped, before any compression, if this file and the included/excluded paths haven't changed since the last push. Leave empty to always push.
+- `AC_CACHE_PUSH_SKIP`: Set to `true` (for example from a custom script step) to skip cache push unconditionally. Not exposed in the step UI.
+
+## Skipping Unchanged Caches
+
+Push checks run in this order and exit as early as possible:
+
+1. `AC_CACHE_PUSH_SKIP=true` skips the push entirely.
+2. When `AC_CACHE_KEY_FILE` is set, its SHA-256 (together with the included and excluded paths) is compared with the key stored inside the pulled cache (`ac_cache/<label>/.ac_depkey`). A match skips the push. The key is written into the cache on every push, so no backend storage is needed. This requires a Cache Pull step with the same label earlier in the workflow.
+3. After compression, if the archives are identical to the pulled ones, the upload is skipped.
+
+Edge cases: a missing key file logs a warning and pushes; the first push (no stored key) always pushes.
+
+## Compression
+
+When `zstd` is available on the runner, each included path is archived with `tar` and compressed with `zstd -1 -T0` (`.tar.zst`), and the archives are bundled with a plain `tar`. Otherwise the step falls back to `zip`. The uploaded object name is unchanged; Cache Pull detects the format from the file header, so Cache Pull must be updated before Cache Push. If an older Cache Pull version is detected in the workflow (it writes only `<bundle>.md5`), Cache Push keeps the zip format so that the older version can still restore the cache.
+
+In the zstd format, an included path that is a symbolic link to a folder is followed and its content is cached (same as zip). Symbolic links inside cached folders are stored as links. On macOS, `COPYFILE_DISABLE=1` is set so that no `._*` metadata files are added. If `tar` reports an error other than GNU tar's "file changed as we read it", the cache is not uploaded.
 
 ## Included & Excluded Paths
 
